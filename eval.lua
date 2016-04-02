@@ -4,6 +4,8 @@ require 'nngraph'
 -- exotics
 require 'loadcaffe'
 -- local imports
+require 'hdf5'
+require 'mattorch'
 local utils = require 'misc.utils'
 require 'misc.DataLoader'
 require 'misc.DataLoaderRaw'
@@ -29,8 +31,8 @@ cmd:option('-dump_images', 1, 'Dump images into vis/imgs folder for vis? (1=yes,
 cmd:option('-dump_json', 1, 'Dump json with predictions into vis folder? (1=yes,0=no)')
 cmd:option('-dump_path', 0, 'Write image paths along with predictions into vis json? (1=yes,0=no)')
 -- Sampling options
-cmd:option('-sample_max', 1, '1 = sample argmax words. 0 = sample from distributions.')
-cmd:option('-beam_size', 2, 'used when sample_max = 1, indicates number of beams in beam search. Usually 2 or 3 works well. More is not better. Set this to 1 for faster runtime but a bit worse performance.')
+cmd:option('-sample_max', 0, '1 = sample argmax words. 0 = sample from distributions.')
+cmd:option('-beam_size', 0, 'used when sample_max = 1, indicates number of beams in beam search. Usually 2 or 3 works well. More is not better. Set this to 1 for faster runtime but a bit worse performance.')
 cmd:option('-temperature', 1.0, 'temperature when sampling from distributions (i.e. when sample_max = 0). Lower = "safer" predictions.')
 -- For evaluation on a folder of images:
 cmd:option('-image_folder', '', 'If this is nonempty then will predict on the images in this folder path')
@@ -65,8 +67,8 @@ end
 -------------------------------------------------------------------------------
 -- Load the model checkpoint to evaluate
 -------------------------------------------------------------------------------
-assert(string.len(opt.model) > 0, 'must provide a model')
-local checkpoint = torch.load(opt.model)
+-- assert(string.len(opt.model) > 0, 'must provide a model')
+local checkpoint = torch.load('checkpoint/lm_epoch2.57_3.2256.t7')
 -- override and collect parameters
 if string.len(opt.input_h5) == 0 then opt.input_h5 = checkpoint.opt.input_h5 end
 if string.len(opt.input_json) == 0 then opt.input_json = checkpoint.opt.input_json end
@@ -80,18 +82,18 @@ local vocab = checkpoint.vocab -- ix -> word mapping
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
-local loader
-if string.len(opt.image_folder) == 0 then
-  loader = DataLoader{h5_file = opt.input_h5, json_file = opt.input_json}
-else
-  loader = DataLoaderRaw{folder_path = opt.image_folder, coco_json = opt.coco_json}
-end
+-- local loader
+-- if string.len(opt.image_folder) == 0 then
+  -- loader = DataLoader{h5_file = opt.input_h5, json_file = opt.input_json}
+-- else
+--   loader = DataLoaderRaw{folder_path = opt.image_folder, coco_json = opt.coco_json}
+-- end
 
 -------------------------------------------------------------------------------
 -- Load the networks from model checkpoint
 -------------------------------------------------------------------------------
 local protos = checkpoint.protos
-protos.expander = nn.FeatExpander(opt.seq_per_img)
+-- protos.expander = nn.FeatExpander(opt.seq_per_img)
 protos.crit = nn.LanguageModelCriterion()
 protos.lm:createClones() -- reconstruct clones inside the language model
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
@@ -101,82 +103,95 @@ if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 -------------------------------------------------------------------------------
 local function eval_split(split, evalopt)
   local verbose = utils.getopt(evalopt, 'verbose', true)
-  local num_images = utils.getopt(evalopt, 'num_images', true)
+  -- local num_images = utils.getopt(evalopt, 'num_images', true)
 
-  protos.cnn:evaluate()
+  -- protos.cnn:evaluate()
   protos.lm:evaluate()
-  loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
+  -- loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
   local n = 0
   local loss_sum = 0
   local loss_evals = 0
   local predictions = {}
-  while true do
+  -- while true do
 
     -- fetch a batch of data
-    local data = loader:getBatch{batch_size = opt.batch_size, split = split, seq_per_img = opt.seq_per_img}
-    data.images = net_utils.prepro(data.images, false, opt.gpuid >= 0) -- preprocess in place, and don't augment
-    n = n + data.images:size(1)
+    -- local data = loader:getBatch{batch_size = opt.batch_size, split = split, seq_per_img = opt.seq_per_img}
+    -- data.images = net_utils.prepro(data.images, false, opt.gpuid >= 0) -- preprocess in place, and don't augment
+    -- n = n + 1
 
     -- forward the model to get loss
-    local feats = protos.cnn:forward(data.images)
+    -- local feats = protos.cnn:forward(data.images)
 
     -- evaluate loss if we have the labels
-    local loss = 0
-    if data.labels then
-      local expanded_feats = protos.expander:forward(feats)
-      local logprobs = protos.lm:forward{expanded_feats, data.labels}
-      loss = protos.crit:forward(logprobs, data.labels)
-      loss_sum = loss_sum + loss
-      loss_evals = loss_evals + 1
-    end
+  local loss = 0
+    -- if data.labels then
+      -- local expanded_feats = protos.expander:forward(feats)
+      -- local logprobs = protos.lm:forward{expanded_feats, data.labels}
+      -- loss = protos.crit:forward(logprobs, data.labels)
+      -- loss_sum = loss_sum + loss
+      -- loss_evals = loss_evals + 1
+    -- end
 
     -- forward the model to also get generated samples for each image
-    local sample_opts = { sample_max = opt.sample_max, beam_size = opt.beam_size, temperature = opt.temperature }
-    local seq = protos.lm:sample(feats, sample_opts)
-    local sents = net_utils.decode_sequence(vocab, seq)
-    for k=1,#sents do
-      local entry = {image_id = data.infos[k].id, caption = sents[k]}
-      if opt.dump_path == 1 then
-        entry.file_name = data.infos[k].file_path
-      end
-      table.insert(predictions, entry)
-      if opt.dump_images == 1 then
-        -- dump the raw image to vis/ folder
-        local cmd = 'cp "' .. path.join(opt.image_root, data.infos[k].file_path) .. '" vis/imgs/img' .. #predictions .. '.jpg' -- bit gross
-        print(cmd)
-        os.execute(cmd) -- dont think there is cleaner way in Lua
-      end
-      if verbose then
-        print(string.format('image %s: %s', entry.image_id, entry.caption))
-      end
-    end
-
-    -- if we wrapped around the split or used up val imgs budget then bail
-    local ix0 = data.bounds.it_pos_now
-    local ix1 = math.min(data.bounds.it_max, num_images)
-    if verbose then
-      print(string.format('evaluating performance... %d/%d (%f)', ix0-1, ix1, loss))
-    end
-
-    if data.bounds.wrapped then break end -- the split ran out of data, lets break out
-    if num_images >= 0 and n >= num_images then break end -- we've used enough images
+  local h5 = hdf5.open('label.h5','r')
+  local h5w = hdf5.open('output1.h5','w')
+  result = torch.DoubleTensor(5011,50)
+  -- io.output(f)
+  for i = 1 , 5011 do
+    local input = h5:read('/labels'):partial({i,i},{1,64})
+    local sample_opts = { sample_max = 0, beam_size = opt.beam_size, temperature = 0.9 }
+    local seq = protos.lm:sample(input:long(),sample_opts)
+    result[i] = seq:double()
+    -- print(result[i])
   end
+  -- print(result[3])
+  h5w:write('/data',result)
+  h5w:close()
+  -- local sents = net_utils.decode_sequence(vocab, seq)
+ 
+  --   for k=1,#sents do
+  --     local entry = {image_id = data.infos[k].id, caption = sents[k]}
+  --     if opt.dump_path == 1 then
+  --       entry.file_name = data.infos[k].file_path
+  --     end
+  --     table.insert(predictions, entry)
+  --     if opt.dump_images == 1 then
+  --       -- dump the raw image to vis/ folder
+  --       local cmd = 'cp "' .. path.join(opt.image_root, data.infos[k].file_path) .. '" vis/imgs/img' .. #predictions .. '.jpg' -- bit gross
+  --       print(cmd)
+  --       os.execute(cmd) -- dont think there is cleaner way in Lua
+  --     end
+  --     if verbose then
+  --       print(string.format('image %s: %s', entry.image_id, entry.caption))
+  --     end
+  --   end
 
-  local lang_stats
-  if opt.language_eval == 1 then
-    lang_stats = net_utils.language_eval(predictions, opt.id)
-  end
+  --   -- if we wrapped around the split or used up val imgs budget then bail
+  --   local ix0 = data.bounds.it_pos_now
+  --   local ix1 = math.min(data.bounds.it_max, num_images)
+  --   if verbose then
+  --     print(string.format('evaluating performance... %d/%d (%f)', ix0-1, ix1, loss))
+  --   end
 
-  return loss_sum/loss_evals, predictions, lang_stats
+  --   if data.bounds.wrapped then break end -- the split ran out of data, lets break out
+  --   if num_images >= 0 and n >= num_images then break end -- we've used enough images
+  -- end
+
+  -- local lang_stats
+  -- if opt.language_eval == 1 then
+  --   lang_stats = net_utils.language_eval(predictions, opt.id)
+  -- end
+
+  -- return loss_sum/loss_evals, predictions, lang_stats
 end
 
-local loss, split_predictions, lang_stats = eval_split(opt.split, {num_images = opt.num_images})
-print('loss: ', loss)
-if lang_stats then
-  print(lang_stats)
-end
+eval_split(0)
+-- print('loss: ', loss)
+-- if lang_stats then
+--   print(lang_stats)
+-- end
 
-if opt.dump_json == 1 then
-  -- dump the json
-  utils.write_json('vis/vis.json', split_predictions)
-end
+-- if opt.dump_json == 1 then
+--   -- dump the json
+--   utils.write_json('vis/vis.json', split_predictions)
+-- end

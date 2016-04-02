@@ -20,8 +20,8 @@ function layer:__init(opt)
   -- options for Language Model
   self.seq_length = utils.getopt(opt, 'seq_length')
   -- create the core lstm network. note +1 for both the START and END tokens
-  self.core = LSTM.lstm(self.input_encoding_size, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
-  self.lookup_table = nn.LookupTable(self.vocab_size + 1, self.input_encoding_size)
+  self.core = LSTM.lstm(self.vocab_size+1, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
+  -- self.lookup_table = nn.LookupTable(self.vocab_size + 1, self.input_encoding_size)
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
 
@@ -46,29 +46,29 @@ function layer:createClones()
   -- construct the net clones
   print('constructing clones inside the LanguageModel')
   self.clones = {self.core}
-  self.lookup_tables = {self.lookup_table}
+  -- self.lookup_tables = {self.lookup_table}
   for t=2,self.seq_length+2 do
     self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
-    self.lookup_tables[t] = self.lookup_table:clone('weight', 'gradWeight')
+    -- self.lookup_tables[t] = self.lookup_table:clone('weight', 'gradWeight')
   end
 end
 
 function layer:getModulesList()
-  return {self.core, self.lookup_table}
+  return {self.core}
 end
 
 function layer:parameters()
   -- we only have two internal modules, return their params
   local p1,g1 = self.core:parameters()
-  local p2,g2 = self.lookup_table:parameters()
+  -- local p2,g2 = self.lookup_table:parameters()
 
   local params = {}
   for k,v in pairs(p1) do table.insert(params, v) end
-  for k,v in pairs(p2) do table.insert(params, v) end
+  -- for k,v in pairs(p2) do table.insert(params, v) end
   
   local grad_params = {}
   for k,v in pairs(g1) do table.insert(grad_params, v) end
-  for k,v in pairs(g2) do table.insert(grad_params, v) end
+  -- for k,v in pairs(g2) do table.insert(grad_params, v) end
 
   -- todo: invalidate self.clones if params were requested?
   -- what if someone outside of us decided to call getParameters() or something?
@@ -80,13 +80,13 @@ end
 function layer:training()
   if self.clones == nil then self:createClones() end -- create these lazily if needed
   for k,v in pairs(self.clones) do v:training() end
-  for k,v in pairs(self.lookup_tables) do v:training() end
+  -- for k,v in pairs(self.lookup_tables) do v:training() end
 end
 
 function layer:evaluate()
   if self.clones == nil then self:createClones() end -- create these lazily if needed
   for k,v in pairs(self.clones) do v:evaluate() end
-  for k,v in pairs(self.lookup_tables) do v:evaluate() end
+  -- for k,v in pairs(self.lookup_tables) do v:evaluate() end
 end
 
 --[[
@@ -95,67 +95,62 @@ Careful: make sure model is in :evaluate() mode if you're calling this.
 Returns: a DxN LongTensor with integer elements 1..M, 
 where D is sequence length and N is batch (so columns are sequences)
 --]]
-function layer:sample(imgs, opt)
+function layer:sample(input, opt)
   local sample_max = utils.getopt(opt, 'sample_max', 1)
   local beam_size = utils.getopt(opt, 'beam_size', 1)
   local temperature = utils.getopt(opt, 'temperature', 1.0)
   if sample_max == 1 and beam_size > 1 then return self:sample_beam(imgs, opt) end -- indirection for beam search
 
-  local batch_size = imgs:size(1)
+  local batch_size = 1
   self:_createInitState(batch_size)
   local state = self.init_state
-
   -- we will write output predictions into tensor seq
   local seq = torch.LongTensor(self.seq_length, batch_size):zero()
   local seqLogprobs = torch.FloatTensor(self.seq_length, batch_size)
   local logprobs -- logprobs predicted in last time step
-  for t=1,self.seq_length+2 do
+  for t=1,self.seq_length+1 do
 
     local xt, it, sampleLogprobs
+    -- if t == 1 then
+    --   -- feed in the images
+    --   xt = imgs
     if t == 1 then
-      -- feed in the images
-      xt = imgs
-    elseif t == 2 then
       -- feed in the start tokens
-      it = torch.LongTensor(batch_size):fill(self.vocab_size+1)
-      xt = self.lookup_table:forward(it)
-    else
-      -- take predictions from previous time step and feed them in
-      if sample_max == 1 then
-        -- use argmax "sampling"
-        sampleLogprobs, it = torch.max(logprobs, 2)
-        it = it:view(-1):long()
-      else
-        -- sample from the distribution of previous predictions
-        local prob_prev
-        if temperature == 1.0 then
-          prob_prev = torch.exp(logprobs) -- fetch prev distribution: shape Nx(M+1)
-        else
-          -- scale logprobs by temperature
-          prob_prev = torch.exp(torch.div(logprobs, temperature))
-        end
-        it = torch.multinomial(prob_prev, 1)
-        sampleLogprobs = logprobs:gather(2, it) -- gather the logprobs at sampled positions
-        it = it:view(-1):long() -- and flatten indices for downstream processing
+      it = torch.LongTensor(1):fill(self.vocab_size+1)
+      xt = torch.LongTensor(batch_size,self.vocab_size+1):fill(0):cuda();
+      for i = 1,batch_size do
+        xt[i][it[i]] = 1
       end
-      xt = self.lookup_table:forward(it)
+      -- xt = self.lookup_table:forward(it)
+    -- elseif t==2 then
+    --   print(index)
+    --   it = torch.LongTensor(1):fill(index);
+    --   xt = self.lookup_table:forward(it)
+    else
+      if input[1][t-1] ==0 then
+        return out[1]
+      else
+        it = torch.LongTensor(1):fill(input[1][t-1]);
+        -- xt = self.lookup_table:forward(it)
+        xt = torch.LongTensor(batch_size,self.vocab_size+1):fill(0):cuda();
+        for i = 1,batch_size do
+          xt[i][it[i]] = 1
+        end
+      end
     end
 
-    if t >= 3 then 
-      seq[t-2] = it -- record the samples
-      seqLogprobs[t-2] = sampleLogprobs:view(-1):float() -- and also their log likelihoods
-    end
 
     local inputs = {xt,unpack(state)}
-    local out = self.core:forward(inputs)
+    out = self.core:forward(inputs)
     logprobs = out[self.num_state+1] -- last element is the output vector
     state = {}
     for i=1,self.num_state do table.insert(state, out[i]) end
   end
+  return out[1]
 
   -- return the samples and their log likelihoods
-  return seq, seqLogprobs
 end
+
 
 --[[
 Implements beam search. Really tricky indexing stuff going on inside. 
@@ -289,13 +284,12 @@ next token at every iteration of the LSTM (+2 because +1 for first dummy
 img forward, and another +1 because of START/END tokens shift)
 --]]
 function layer:updateOutput(input)
-  local imgs = input[1]
-  local seq = input[2]
+  -- local imgs = input[1]
+  local seq = input[1]
   if self.clones == nil then self:createClones() end -- lazily create clones on first forward pass
-
   assert(seq:size(1) == self.seq_length)
   local batch_size = seq:size(2)
-  self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1)
+  self.output:resize(self.seq_length+1, batch_size, self.vocab_size+1)
   
   self:_createInitState(batch_size)
 
@@ -303,21 +297,25 @@ function layer:updateOutput(input)
   self.inputs = {}
   self.lookup_tables_inputs = {}
   self.tmax = 0 -- we will keep track of max sequence length encountered in the data for efficiency
-  for t=1,self.seq_length+2 do
+  for t=1,self.seq_length+1 do
 
     local can_skip = false
     local xt
+    -- if t == 1 then
+    --   -- feed in the images
+    --   xt = imgs -- NxK sized input
     if t == 1 then
-      -- feed in the images
-      xt = imgs -- NxK sized input
-    elseif t == 2 then
       -- feed in the start tokens
       local it = torch.LongTensor(batch_size):fill(self.vocab_size+1)
-      self.lookup_tables_inputs[t] = it
-      xt = self.lookup_tables[t]:forward(it) -- NxK sized input (token embedding vectors)
+      -- self.lookup_tables_inputs[t] = it
+      xt = torch.LongTensor(batch_size,self.vocab_size+1):fill(0):cuda();
+      for i = 1,batch_size do
+        xt[i][it[i]] = 1
+      end
+      -- xt = self.lookup_tables[t]:forward(it) -- NxK sized input (token embedding vectors)
     else
       -- feed in the rest of the sequence...
-      local it = seq[t-2]:clone()
+      local it = seq[t-1]:clone()
       if torch.sum(it) == 0 then
         -- computational shortcut for efficiency. All sequences have already terminated and only
         -- contain null tokens from here on. We can skip the rest of the forward pass and save time
@@ -333,8 +331,13 @@ function layer:updateOutput(input)
       it[torch.eq(it,0)] = 1
 
       if not can_skip then
-        self.lookup_tables_inputs[t] = it
-        xt = self.lookup_tables[t]:forward(it)
+        -- self.lookup_tables_inputs[t] = it
+        -- xt = self.lookup_tables[t]:forward(it)
+        xt = torch.LongTensor(batch_size,self.vocab_size+1):fill(0):cuda();
+
+        for i = 1,batch_size do
+          xt[i][it[i]] = 1
+        end
       end
     end
 
@@ -343,6 +346,7 @@ function layer:updateOutput(input)
       self.inputs[t] = {xt,unpack(self.state[t-1])}
       -- forward the network
       local out = self.clones[t]:forward(self.inputs[t])
+      -- print(out[2][1])
       -- process the outputs
       self.output[t] = out[self.num_state+1] -- last element is the output vector
       self.state[t] = {} -- the rest is state
@@ -350,7 +354,7 @@ function layer:updateOutput(input)
       self.tmax = t
     end
   end
-
+  -- print(self.output)
   return self.output
 end
 
@@ -361,10 +365,12 @@ function layer:updateGradInput(input, gradOutput)
   local dimgs -- grad on input images
 
   -- go backwards and lets compute gradients
+  -- print('tmax')
   local dstate = {[self.tmax] = self.init_state} -- this works when init_state is all zeros
   for t=self.tmax,1,-1 do
     -- concat state gradients and output vector gradients at time step t
     local dout = {}
+
     for k=1,#dstate[t] do table.insert(dout, dstate[t][k]) end
     table.insert(dout, gradOutput[t])
     local dinputs = self.clones[t]:backward(self.inputs[t], dout)
@@ -374,17 +380,18 @@ function layer:updateGradInput(input, gradOutput)
     for k=2,self.num_state+1 do table.insert(dstate[t-1], dinputs[k]) end
     
     -- continue backprop of xt
-    if t == 1 then
-      dimgs = dxt
-    else
-      local it = self.lookup_tables_inputs[t]
-      self.lookup_tables[t]:backward(it, dxt) -- backprop into lookup table
-    end
+    -- print(dinputs)
+    -- if t == 1 then
+      -- dimgs = dxt
+    -- else
+    -- local it = self.lookup_tables_inputs[t]
+    -- self.lookup_tables[t]:backward(it, dxt) -- backprop into lookup table
+    -- end
   end
 
   -- we have gradient on image, but for LongTensor gt sequence we only create an empty tensor - can't backprop
-  self.gradInput = {dimgs, torch.Tensor()}
-  return self.gradInput
+  -- self.gradInput = {dimgs, torch.Tensor()}
+  -- return self.gradInput
 end
 
 -------------------------------------------------------------------------------
@@ -410,27 +417,26 @@ function crit:updateOutput(input, seq)
   self.gradInput:resizeAs(input):zero() -- reset to zeros
   local L,N,Mp1 = input:size(1), input:size(2), input:size(3)
   local D = seq:size(1)
-  assert(D == L-2, 'input Tensor should be 2 larger in time')
+  assert(D == L-1, 'input Tensor should be 2 larger in time')
 
   local loss = 0
   local n = 0
   for b=1,N do -- iterate over batches
     local first_time = true
-    for t=2,L do -- iterate over sequence time (ignore t=1, dummy forward for the image)
+    for t=1,L do -- iterate over sequence time (ignore t=1, dummy forward for the image)
 
       -- fetch the index of the next token in the sequence
       local target_index
-      if t-1 > D then -- we are out of bounds of the index sequence: pad with null tokens
+      if t > D then -- we are out of bounds of the index sequence: pad with null tokens
         target_index = 0
       else
-        target_index = seq[{t-1,b}] -- t-1 is correct, since at t=2 START token was fed in and we want to predict first word (and 2-1 = 1).
+        target_index = seq[{t,b}] -- t-1 is correct, since at t=2 START token was fed in and we want to predict first word (and 2-1 = 1).
       end
       -- the first time we see null token as next index, actually want the model to predict the END token
       if target_index == 0 and first_time then
         target_index = Mp1
         first_time = false
       end
-
       -- if there is a non-null next token, enforce loss!
       if target_index ~= 0 then
         -- accumulate loss
@@ -447,5 +453,6 @@ function crit:updateOutput(input, seq)
 end
 
 function crit:updateGradInput(input, seq)
+  -- print(self.gradInput)
   return self.gradInput
 end
