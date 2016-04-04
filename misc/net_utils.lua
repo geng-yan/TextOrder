@@ -81,6 +81,7 @@ end
 local layer, parent = torch.class('nn.FeatExpander', 'nn.Module')
 function layer:__init(n)
   parent.__init(self)
+  -- print(n)
   self.n = n
 end
 function layer:updateOutput(input)
@@ -99,6 +100,7 @@ function layer:updateGradInput(input, gradOutput)
   if self.n == 1 then self.gradInput = gradOutput; return self.gradInput end -- act as noop for efficiency
   -- add up the gradients for each block of expanded features
   self.gradInput:resizeAs(input)
+
   local d = input:size(2)
   for k=1,input:size(1) do
     local j = (k-1)*self.n+1

@@ -108,8 +108,8 @@ else
   -- intialize language model
   local lmOpt = {}
   lmOpt.vocab_size = loader:getVocabSize()
-  lmOpt.input_encoding_size = 30
-  lmOpt.rnn_size = 50
+  lmOpt.input_encoding_size = 30 -- invalid for temporary
+  lmOpt.rnn_size = 100
   lmOpt.num_layers = 1
   lmOpt.dropout = 0.5
   lmOpt.seq_length = loader:getSeqLength()
@@ -152,6 +152,7 @@ thin_lm.core:share(protos.lm.core, 'weight', 'bias') -- TODO: we are assuming th
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
 -- net_utils.sanitize_gradients(thin_cnn)
 local lm_modules = thin_lm:getModulesList()
+-- print(lm_modules)
 for k,v in pairs(lm_modules) do net_utils.sanitize_gradients(v) end
 
 -- create clones and ensure parameter sharing. we have to do this 
@@ -186,7 +187,7 @@ local function eval_split(split, evalopt)
     -- forward the model to get loss
     -- local feats = protos.cnn:forward(data.images)
     -- local expanded_feats = protos.expander:forward(feats)
-    local logprobs = protos.lm:forward{data.labels}
+    local logprobs = protos.lm:forward{data.labels,data.images}
     local loss = protos.crit:forward(logprobs, data.labels)
     loss_sum = loss_sum + loss
     loss_evals = loss_evals + 1
@@ -249,10 +250,12 @@ local function lossFun()
   -- we have to expand out image features, once for each sentence
   -- local expanded_feats = protos.expander:forward(feats)
   -- forward the language model
-  local logprobs = protos.lm:forward{data.labels}
+  -- print(data.images)
+  local logprobs = protos.lm:forward{data.labels,data.images}
   -- forward the language model criterion
+  -- print(logprobs)
   local loss = protos.crit:forward(logprobs, data.labels)
-  
+  -- print(loss)
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
@@ -268,8 +271,10 @@ local function lossFun()
   -- end
 
   -- clip gradients
+  -- print(grad_params)
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
   grad_params:clamp(-opt.grad_clip, opt.grad_clip)
+  -- print(torch.sum(grad_params))
   -- print(grad_params)
 
   -- apply L2 regularization

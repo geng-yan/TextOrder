@@ -5,8 +5,10 @@ local LSTM = {}
 function LSTM.lstm(input_size, output_size, rnn_size, n, dropout)
   dropout = dropout or 0 
 
+  dim = 300
   -- there will be 2*n+1 inputs
   local inputs = {}
+
   table.insert(inputs, nn.Identity()()) -- indices giving the sequence of symbols
   for L = 1,n do
     table.insert(inputs, nn.Identity()()) -- prev_c[L]
@@ -52,13 +54,15 @@ function LSTM.lstm(input_size, output_size, rnn_size, n, dropout)
     table.insert(outputs, next_c)
     table.insert(outputs, next_h)
   end
-
+  -- local top_h = outputs[#outputs]
   -- set up the decoder
   local top_h = outputs[#outputs]
   if dropout > 0 then top_h = nn.Dropout(dropout)(top_h):annotate{name='drop_final'} end
-  local proj = nn.Linear(rnn_size, output_size)(top_h):annotate{name='decoder'}
-  local logsoft = nn.LogSoftMax()(proj)
-  table.insert(outputs, logsoft)
+  -- local proj = nn.Linear(rnn_size, output_size)(top_h):annotate{name='decoder'}
+  local proj = nn.Linear(rnn_size,dim)(top_h):annotate{name='projection'}
+  -- local logsoft = nn.LogSoftMax()(proj)
+  -- local simi = nn.CosineEmbeddingCriterion()({proj4,proj)
+  table.insert(outputs,proj)
 
   return nn.gModule(inputs, outputs)
 end

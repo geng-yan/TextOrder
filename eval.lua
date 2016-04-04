@@ -68,7 +68,7 @@ end
 -- Load the model checkpoint to evaluate
 -------------------------------------------------------------------------------
 -- assert(string.len(opt.model) > 0, 'must provide a model')
-local checkpoint = torch.load('checkpoint/lm_epoch2.57_3.2256.t7')
+local checkpoint = torch.load('checkpoint/lm_epoch0.57_0.0000.t7')
 -- override and collect parameters
 if string.len(opt.input_h5) == 0 then opt.input_h5 = checkpoint.opt.input_h5 end
 if string.len(opt.input_json) == 0 then opt.input_json = checkpoint.opt.input_json end
@@ -133,19 +133,25 @@ local function eval_split(split, evalopt)
     -- end
 
     -- forward the model to also get generated samples for each image
-  local h5 = hdf5.open('label.h5','r')
-  local h5w = hdf5.open('output1.h5','w')
-  result = torch.DoubleTensor(5011,50)
+  local h5 = hdf5.open('label_test.h5','r')
+  h52 = hdf5.open('img.h5','r')
+  local h5w = hdf5.open('output_45_test.h5','w')
+  result = torch.DoubleTensor(4952,50)
+  result2 = torch.DoubleTensor(4952,50)
   -- io.output(f)
-  for i = 1 , 5011 do
+  for i = 1 , 4952 do
     local input = h5:read('/labels'):partial({i,i},{1,64})
+    img = h52:read('/test'):partial({i,i},{1,776})
     local sample_opts = { sample_max = 0, beam_size = opt.beam_size, temperature = 0.9 }
-    local seq = protos.lm:sample(input:long(),sample_opts)
+    local seq,seq2 = protos.lm:sample({input:long(),img},sample_opts)
+    
     result[i] = seq:double()
+    result2[i] = seq2:double()
     -- print(result[i])
   end
   -- print(result[3])
   h5w:write('/data',result)
+  h5w:write('/img',result2)
   h5w:close()
   -- local sents = net_utils.decode_sequence(vocab, seq)
  

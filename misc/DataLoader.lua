@@ -15,7 +15,7 @@ function DataLoader:__init(opt)
   -- open the hdf5 file
   print('DataLoader loading h5 file: ', opt.h5_file)
   self.h5_file = hdf5.open('label.h5', 'r')
-  
+  self.h5_file2 = hdf5.open('result.h5','r')
   -- extract image size from dataset
   -- local images_size = self.h5_file:read('/images'):dataspaceSize()
   -- assert(#images_size == 4, '/images should be a 4D tensor')
@@ -84,7 +84,7 @@ function DataLoader:getBatch(opt)
   assert(split_ix, 'split ' .. split .. ' not found.')
 
   -- pick an index of the datapoint to load next
-  -- local img_batch_raw = torch.ByteTensor(batch_size, 3, 256, 256)
+  local img_batch_raw = torch.DoubleTensor(batch_size,4096)
   local label_batch = torch.LongTensor(batch_size * seq_per_img, self.seq_length)
   local max_index = #split_ix
   local wrapped = false
@@ -101,7 +101,10 @@ function DataLoader:getBatch(opt)
     -- local img = self.h5_file:read('/images'):partial({ix,ix},{1,self.num_channels},
                             -- {1,self.max_image_size},{1,self.max_image_size})
     -- img_batch_raw[i] = img
-
+    local img = self.h5_file2:read('/data'):partial({ix,ix},{1,4096})
+    img_batch_raw[i] =img
+    -- print(img)
+    -- print(img)
     -- fetch the sequence labels
     local ix1 = self.label_start_ix[ix]
     local ix2 = self.label_end_ix[ix]
